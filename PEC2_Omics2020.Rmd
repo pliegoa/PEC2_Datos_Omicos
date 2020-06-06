@@ -1,0 +1,759 @@
+---
+title: "PEC2.RNA-seq"
+author: "Alicia PLiego"
+date: "5/25/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+### INTRODUCCIÓN:
+
+El archivo targets_and_counts.xls contiene la información de las muestras de un estudio obtenido del repositorio (GTEx1). Este repositorio contiene datos de múltiples tipos en un total de
+54 tejidos. Nosotros nos centraremos en los datos de expresión (RNA-seq) pertenecientes a un análisis del tiroides en donde se compara tres tipos de infiltración medido en un total de 292 muestras pertenecientes a tres grupos:
+
+  • Not infiltrated tissues (NIT): 236 samples
+  • Small focal infiltrates (SFI): 42 samples
+  • Extensive lymphoid infiltrates (ELI): 14 samples.
+  
+En este ejercicio no os pedimos que busquéis un estudio para analizar sino que ya os proporcionamos los datos preprocesados en una tabla de contajes y os pedimos que seleccionéis 30 muestras aleatoriamente, 10 de cada grupo.
+
+
+###OBJETIVOS:
+
+El objetivo de este trabajo es comparar la expresión génica en tejidos de tiroides comparando los diferentes grupos presentes del estudio, NIT, SFI y ELI.
+
+###METHODS
+
+Para la realización de este trabajo se ha utilizado el pipeline proporcionado por: http://master.bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html#aligning-reads-to-a-reference-genome. Realizado en Bioconductor en R.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, message=FALSE}
+#if(!require(BiocManager)) install.packages("BiocManager")
+#if(!require(airway)) BiocManager::install("airway")
+#if(!require(Rsamtools)) BiocManager::install("Rsamtools")
+#if(!require(GenomicFeatures)) BiocManager::install("GenomicFeatures")
+#if(!require(DESeq2)) BiocManager::install("DESeq2")
+#if(!require(apeglm)) BiocManager::install("apeglm")
+#if(!require(BiocParallel)) BiocManager::install("BiocParallel")
+#if(!require(genefilter)) BiocManager::install("genefilter")
+#if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
+#if(!require(AnnotationDbi)) BiocManager::install("AnnotationDbi")
+#if(!require(ReportingTools)) BiocManager::install("ReportingTools")
+#if(!require(RUVSeq)) BiocManager::install("RUVSeq")
+#if(!require(sva)) BiocManager::install("sva")
+#if(!require(Gviz)) BiocManager::install("Gviz")
+
+#if(!require(magrittr)) install.packages("magrittr", dep=TRUE)
+#if(!require(dplyr)) install.packages("dplyr", dep=TRUE)
+#if(!require(ggplot2)) install.packages("ggplot2", dep=TRUE)
+#if(!require(pheatmap)) install.packages("pheatmap", dep=TRUE)
+#if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
+#if(!require(ggbeeswarm)) install.packages("ggbeeswarm", dep=TRUE)
+```
+
+
+
+### Se parte de una matriz de counts.
+
+Construcción de un objeto DESeqDataSeq partiento de la count matrix  y la tabla correspondiente a la información de las muestras.
+
+```{r}
+setwd("~/Desktop/UOC2020/rna-seq")
+```
+
+Count matrix:
+
+```{r}
+#mydata <- read.csv2(file='counts.csv', sep=";", header=TRUE)
+#mydata
+```
+```{r}
+#coldata <- read.csv2(file='targets.csv', sep=",", header=TRUE)
+#coldata
+```
+
+*Dividir los datos en 10 de cada grupo aleatoriamente*
+
+```{r}
+#coldata$Sample_Name <- gsub('-', '.', coldata$Sample_Name)
+```
+
+Primero se agrupan los datos por la variable Group y se seleccionan 10 muestras de cada grupo.
+
+```{r}
+library(dplyr)
+#new_df <- coldata %>% group_by(Group) %>% sample_n(10)
+#new_df
+```
+
+Filtrar las columnas con el Sample_Name seleccionado previamente:
+```{r}
+#mydataF <- mydata[ ,new_df$Sample_Name]
+#colnames(mydataF)
+```
+
+
+Añadir la columna con los nombres de los genes para completar la matrix counts filtrada:
+
+```{r}
+#mydataFiltered <- cbind(mydata$X, mydataF)
+
+#colnames(mydataFiltered)[1] <- 'Sample_Name'
+
+#mydataFiltered
+```
+
+
+Guardar los resultados:
+
+```{r}
+#write.csv(result, file = "counts_New.csv")
+#write.csv(new_df, file = "samples_New.csv")
+```
+
+*Read the new counts and sample matrix*
+
+
+```{r}
+result1<- read.csv2(file='counts_New.csv', sep=",", header=TRUE)
+new_df<- read.csv2(file='samples_New.csv', sep=",", header=TRUE)
+```
+
+
+```{r}
+result <- result1[-1]
+row.names(result) <- result1$X
+```
+
+Crear un objeto con la información de los resultados, de las anotaciones o metadata.
+
+```{r}
+library('checkmate')
+library("DESeq2")
+ddsMat <- DESeqDataSetFromMatrix(countData = result,
+                                  colData = new_df,
+                                  design = ~ Group)
+ddsMat
+```
+
+Los elementos que contiene el objeto son:
+
+\begin{itemize}
+  \item \texttt{countdata}: a table with the fragment counts
+  \item \texttt{coldata}: a table with information about the samples
+\end{itemize}
+
+
+### Analisis exploratorio y visualización.
+
+Primero se realiza una transformación de los counts para poder visualizar las relaciones entre las diferentes muestras. 
+
+En la segunda parte, volveremos a los datos crudos para el análisis estadístico.
+
+#### Pre-filtrado
+
+Primero se eliminan las filas con muchos ceros, ya que estas filas no aportan información sobre la cantidad de expresión génica. 
+
+```{r}
+nrow(ddsMat)
+
+keep <- rowSums(counts(ddsMat)) >1
+ddsMat <- ddsMat[keep,]
+
+nrow(ddsMat)
+```
+Como podemos ver, se filtan ~13.000 filas, es decir, se elimnan ese número de genes que apenas tienen expresión.
+
+Se puede realizar un filtrado adicional. Por ejemplo, filtrando que al menos tres muestras tengan un count de 10 o más. Ejemplo:
+
+
+```{r}
+keep <- rowSums(counts(ddsMat) >= 10) >= 3
+```
+
+
+#### Rlog y transformación de la varianza.
+
+DESeq ofrece dos transformaciones para los counts que estabilizan la varianza de las medias (VST), para datos negativos binomiales con una tendencia de dispersión de media.
+Para los genes con counts altos, tanto la función VST como el rlog darán resultados similares al log2 de los counts normalizados. Para los genes con bajos counts, ain embargo, los valores se tornarán hacia el valor medio.
+
+
+\textbf{Which transformation to choose?} La función VST es más rápida y menos sensitiva  los altos counts outliers que la función rlog. La función rlog tiene a funcionar bien en pequeños sets de datos (n < 30).
+
+\textit{Note that the two transformations offered by DESeq2 are provided for applications other than differential testing. For differential testing we recommend the DESeq function applied to raw counts, as described later in this workflow, which also takes into account the dependence of the variance of counts on the mean value during the dispersion estimation step.}
+
+Tanto la función vst como la rlog devuelven un objeto DESeqTransform que se basa en una clase SummarizedExperiment. Los valores transformados ya no serán counts, y se guardarán en el apartado assay.  
+
+\textbf{VST}
+```{r}
+lambda <- 10^seq(from = -1, to = 2, length = 1000)
+cts <- matrix(rpois(1000*100, lambda), ncol = 100)
+library("vsn")
+meanSdPlot(cts, ranks = FALSE)
+```
+En este gráfico podemos observar los valores obtenidos mediante la función VST.
+
+```{r}
+log.cts.one <- log2(cts + 1)
+meanSdPlot(log.cts.one, ranks = FALSE)
+```
+Aquí podemos observar los valores obtenidos mediante la función rlog.
+
+```{r}
+vsd <- vst(ddsMat, blind = FALSE)
+head(assay(vsd), 3)
+
+```
+```{r}
+colData(vsd)
+```
+
+\textbf{rlog}
+En la función rlog, especificamos blind ) FALSE, que significa que las diferencias entre los grupos y el tipo de muestra no contribuyen a la varianza media esperada del experimento. El diseño experimental no se usa directamente en la transformación, solo para estimar la cantidad global de variabilidad en los counts. Para una transformación no supervisada total, se puede usar blind = TRUE.
+
+```{r}
+rld <- rlog(ddsMat, blind = FALSE)
+head(assay(rld), 3)
+```
+
+
+Para visualizar el efecto de la transformación, en la siguiente figura mostraremos la función log2 de las muestras, y luego usando los valores de VST y rlog.
+Para la transformación log2, primero necesitamos estimar el tamaño de los factores para contabilizar la profundidad de la secuenciación, y luego especificar normalized = TRUE. Esta correctión de la profundidad de la secuenciación se corrige automaticamente para la vst y la rlog.
+
+```{r message=FALSE, fig.align='center', fig.width=7, fig.height=6}
+library("dplyr")
+library("ggplot2")
+
+dds <- estimateSizeFactors(ddsMat)
+
+df <- bind_rows(
+  as_data_frame(log2(counts(ddsMat)[, 1:2]+1)) %>%
+         mutate(transformation = "log2(x + 1)"),
+  as_data_frame(assay(vsd)[, 1:2]) %>% mutate(transformation = "vst"),
+  as_data_frame(assay(rld)[, 1:2]) %>% mutate(transformation = "rlog"))
+  
+colnames(df)[1:2] <- c("x", "y")  
+
+ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
+  coord_fixed() + facet_grid( . ~ transformation)  
+```
+
+Scatter plot:
+
+Podemos ver como los genes con un count bajo, son muy variables en la escala logaritmica (log2), mientras que la función VST y rlog comprimen las diferencias para los genes con counts bajos para los que se dispone de poca información sobre expresión diferencia. 
+
+#### 3.6.3 Samples distances
+
+Primero vamos a analizar la similitud entre las muestras: qué muestras son similares entre sí, cuáles son diferentes ? 
+
+
+```{r}
+sampleDists <- dist(t(assay(vsd)))
+head(sampleDists)
+```
+
+Para visualizar las distancias en un heatmap usamos el paquete pheatmap.
+Para mostrar la matriz difeencial con las filas y columnas organizadas por las distancias en nuestra  matriz,  manualmente proveemos sampleDist para la clustering_distance de la función pheatmap. De todas formas, la función pheatmap asumirá que la matrix contiene los valores, y podríamos calcular las distancias entre las filas y columnas de la matriz de distancias, que no es deseado.
+
+```{r message=FALSE, fig.align='center', fig.width=6, fig.height=4}
+library("pheatmap")
+library("RColorBrewer")
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste( vsd$Group, vsd$Sample_Name , sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+```
+
+\textbf{Heatmap of sample-to-sample distances using the rlog-transformed values.}
+
+
+
+```{r}
+#install.packages('PoiClaClu')
+```
+
+Calculamos la distancia de poisson:
+
+```{r}
+library("PoiClaClu")
+poisd <- PoissonDistance(t(counts(ddsMat)))
+```
+Podemos tambiñen mostrar la matriz de distancias con la distancia de poisson.
+
+```{r}
+samplePoisDistMatrix <- as.matrix( poisd$dd )
+rownames(samplePoisDistMatrix) <- paste( dds$Group , dds$Sample_Name , sep=" - " )
+colnames(samplePoisDistMatrix) <- NULL
+pheatmap(samplePoisDistMatrix,
+         clustering_distance_rows = poisd$dd,
+         clustering_distance_cols = poisd$dd,
+         col = colors)
+```
+
+
+#### 3.6.4 PCA plot
+
+Realizamos el PCA plot usando los datos VST. Cada combinación unica de muestra y grupo dará su propio color.
+
+Hemos usado la función plotPCA que viene con DESeq2. Los dos términos especificados en intgroup  son los grupos de intersección para las muestras. Tambien se puede realizar el PCA con ggplot2, esto se realiza con plotPCA (Wickham 2009). 
+
+```{r}
+#install.packages("glmpca")
+```
+
+```{r fig.align='center', fig.width=5, fig.height=5}
+
+library("glmpca")
+gpca <- glmpca(counts(ddsMat), L=2)
+gpca.dat <- gpca$factors
+gpca.dat$dex <- dds$Group
+gpca.dat$cell <- dds$Sample_Name
+
+```
+
+
+```{r}
+ggplot(gpca.dat, aes(x = dim1, y = dim2, color = dex)) +
+  geom_point(size =3) + coord_fixed() + ggtitle("glmpca - Generalized PCA")
+```
+
+Podemos ver que los datos pertenecientes a SFI son bastantes diversos.
+
+
+#### 3.6.5 MDS plot
+
+El MDS plot es útil cuando no tenemos una matriz de datos, sino una matriz de distancias. Aquí calculamos la MDS para las distancias calculadas con los datos VST y los mostramos en la siguiente figura.
+
+```{r fig.align='center', fig.width=5, fig.height=5}
+mds <- as.data.frame(colData(vsd))  %>%
+         cbind(cmdscale(sampleDistMatrix))
+ggplot(mds, aes(x = `1`, y = `2`, color = Group)) +
+  geom_point(size = 3) + coord_fixed()
+```
+Al igual que en el PCA anterior, podemos ver que los datos pertenecientes al grupo SFI son muy varibales dependiendo de cada muestra.
+
+### 3.7 Differential Expression Analysis
+
+Como ya hemos especificado el diseño experimental cuando creamos el DESeqDataSet, podemos calcular la expressión diferencial en los counts crudos con la función DESeq:
+
+```{r}
+library('DESeq')
+dds <- DESeq(ddsMat, parallel =TRUE)
+```
+
+\\
+Obtenemos los resultados del objeto dds de los datos crudos.
+
+```{r}
+res <- results(dds)
+res
+```
+
+Como el objetos DataFrame object contiene metadata con información con información sobre las columnas podemos realizar comparaciones:
+
+**Comparación entre los grupos ELI-SFI**
+
+```{r}
+res <- results(dds, contrast=c("Group","SFI","ELI"))
+
+```
+
+
+```{r}
+mcols(res, use.names = TRUE)
+```
+
+Where:
+\begin{itemize}
+  \item \textbf{baseMean}, is a just the average of the normalized count values, divided by the size factors, taken over all samples in the DESeqDataSet
+  \item \textbf{log2FoldChange}, is the effect size estimate. It tells us how much the gene’s expression seems to have changed due to treatment with dexamethasone in comparison to untreated samples.
+  \item \textbf{lfcSE}, the standard error estimate for the log2 fold change estimate.
+  \item \textbf{padj}, DESeq2 uses the Benjamini-Hochberg (BH) adjustment (Benjamini and Hochberg 1995) as implemented in the base R p.adjust function.
+\end{itemize}
+
+Resumen de los datos de la comparación del grupo SFI y ELI:
+
+```{r}
+summary(res)
+```
+
+Para ser más estrictos, hay dos maneras en las que los genes se puede considerar significativos:
+
+\begin{enumerate}
+  \item lower the false discovery rate threshold (\textit{padj})
+  \item raise the log2 fold change threshold from 0 using the \textit{lfcThreshold} argument of results.
+\end{enumerate}
+
+Si disminuimos el límite de false discovery rate :
+
+```{r}
+res.05 <- results(dds, alpha = 0.05)
+table(res.05$padj < 0.05)
+```
+
+Si queremos elevar el límite del log2 fold change:
+
+```{r}
+resLFC1 <- results(dds, lfcThreshold=1)
+table(resLFC1$padj < 0.1)
+```
+
+Por lo tanto, si consideramos una fracción de falsos positivos del 10% aceptable, podemos considerar todos los genes con un p value ajustado por debajo del 10%  = 0.1 como significante. Cuántos genes hay aquí?
+
+
+```{r}
+sum(res$padj < 0.1, na.rm=TRUE)
+```
+
+#### 3.7.1 Otras comparaciones
+
+En general, los resultados de una comparación para dos niveles de una variable se pueden extraer con una matriz de contrastes de los resultados. El usuario debe especificar  tres valores: el nombre de la variable, el nombre del nivel del nominador y del denominador. 
+
+**Comparación entre los grupos ELI-NIT**
+
+```{r}
+res2 <- results(dds, contrast = c("Group", "ELI", "NIT"))
+```
+
+**Comparación entre los grupos SFI-NIT**
+
+```{r}
+res3 <- results(dds, contrast = c("Group", "SFI", "NIT"))
+
+```
+
+```{r}
+head(res)
+head(res2)
+head(res3)
+```
+
+El gen DDX11L1 (ENSG00000223972.4), que es el que mayor expresión tiene un p value de 0.97 entre el grupo SFI y NIT y 0.3 entre ELI-NIT, por lo que no su expresión no es diferencialmente significativa, tampoco entre los grupos SFI y ELI con un p value de 0.28.
+
+Según el p value, ninguno de los 6 genes mayormente expresados presentan un p value menor de 0.1, salvo el gen ENSG00000227232.4, entre los grupos SFI y NIT en el que se presenta diferencialmente expresado.
+
+
+##Multiple Testing:
+
+```{r}
+sum(res$pvalue < 0.05, na.rm=TRUE)
+```
+
+```{r}
+sum(!is.na(res$pvalue))
+```
+
+```{r}
+sum(res$padj < 0.1, na.rm=TRUE)
+```
+
+
+
+We subset the results table to these genes and then sort it by the log2 fold change estimate to get the significant genes with the strongest down-regulation:
+
+
+```{r}
+resSig <- subset(res, padj < 0.1)
+head(resSig[ order(resSig$log2FoldChange), ])
+```
+
+
+…and with the strongest up-regulation:
+
+```{r}
+head(resSig[ order(resSig$log2FoldChange, decreasing = TRUE), ])
+```
+
+
+\textit{Note: Sometimes a subset of the p values in res will be NA (“not available”). This is DESeq’s way of reporting that all counts for this gene were zero, and hence no test was applied. In addition, p values can be assigned NA if the gene was excluded from analysis because it contained an extreme count outlier.}
+
+
+
+
+### 3.8 Plotting results
+
+#### 3.8.1 Counts plot
+
+Con plotCounts podemos visualizar los argumentos de DESeqDataSet, un nombre de un gen y los tres diferentes grupos de estudio.
+
+
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4}
+topGene <- rownames(res)[which.min(res$padj)]
+plotCounts(dds, gene = topGene, intgroup=c("Group"))
+
+```
+Como podemos ver con este gen en concreto, se expresa más en el grupo SFI que en NIT y en NIT más que en el grupo ELI.
+
+```{r}
+library("ggbeeswarm")
+geneCounts <- plotCounts(dds, gene = topGene, intgroup = c("Group","Sample_Name"),
+                         returnData = TRUE)
+ggplot(geneCounts, aes(x = Group, y = count, color = Sample_Name)) +
+  scale_y_log10() +  geom_beeswarm(cex = 3)
+```
+```{r}
+ggplot(geneCounts, aes(x = Group, y = count, color = Sample_Name , group = Sample_Name)) +
+  scale_y_log10() + geom_point(size = 3) + geom_line()
+```
+
+#### 3.8.2 MA-Plot
+
+El gráfico MA (Dudoit et al. 2002) nos proporciona información útil sobre la distribución de los coeficientes estimadores en un modelo, por ejemplo, las comparaciones de interés, entre todos los genes. En el eje y, la M significa menos - substrae los valores log, que es equivalente al log del ratio y - en el eje x , la A significa media.
+
+Antes de hacer el gráfico MA, usamos la función para los cambios de log2 para comparar los diferentes grupos. Hay tres diferentes tipos de estimadores en DESeq2, que son cubiertos en la vignette DESeq2. 
+Aquí especifico el método apeglm para los coeficientes, los estimadores para reducir el ruido de los valores LFC estimados, mientras que proporciona un bias bajo para los estimados LFC para grandes diferencias. Aquí, utilizo apeglm para especificar un coeficiente desde un modelo a reducir, tanto por su nombre como por su número como el coeficiente aparece en resultsName(dds).
+
+```{r}
+#install.packages("apeglm")
+```
+
+```{r message=FALSE}
+library("apeglm")
+resultsNames(dds)
+```
+
+```{r fig.align='center', fig.width=5, fig.height=4}
+res <- lfcShrink(dds, coef="Group_SFI_vs_ELI", type="apeglm")
+
+```
+
+Podemos etiquetar los puntos individuales en el gráfico MA también. Aquí usamos la función de R para mostrar un círuclo y texto para una fila específica de los resultados obtenidos.
+
+
+```{r}
+hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20,
+     col = "grey50", border = "white")
+```
+
+#### 3.8.3 Gene clustering
+
+Normalmente se agrupan un subset de los genes más variables. Se utilizan los datos VST:
+
+
+```{r message= FALSE, fig.align='center', fig.width=5, fig.height=4}
+library("genefilter")
+topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 20)
+
+mat  <- assay(vsd)[topVarGenes, ]
+mat  <- mat - rowMeans(mat)
+anno <- as.data.frame(colData(vsd)[, c("Group", "Sample_Name")])
+pheatmap(mat, annotation_col = anno)
+```
+
+
+```{r}
+qs <- c(0, quantile(resLFC1$baseMean[resLFC1$baseMean > 0], 0:6/6))
+bins <- cut(resLFC1$baseMean, qs)
+levels(bins) <- paste0("~", round(signif((qs[-1] + qs[-length(qs)])/2, 2)))
+fractionSig <- tapply(resLFC1$pvalue, bins, function(p)
+                          mean(p < .05, na.rm = TRUE))
+barplot(fractionSig, xlab = "mean normalized count",
+                     ylab = "fraction of small p values")
+```
+
+
+
+#### 3.8.4 Ploting fold changes in genomic space
+
+Si hemos usado la función summarizeOverlaps para contar los reads, luego nuestro objeto DESeqDataSeq se construye sobre un objeto de bioconductor que especifica las coordinadas genómicas de los genes. Por lo tanto, podemos aplicar fácilmente los resultados de la expresión diferencial en el espacio genómico. Miestras los resultados de la función devuelven un DataFrame, usando el formato argumento, podemos utilizar GRanges o GRangesList output. 
+
+Necesitamos añadir el símbolo de nuevo para etiquetar los genes en el gráfico:
+
+We need to add the symbol again for labeling the genes on the plot:
+
+```{r message=FALSE}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+```
+
+```{r}
+columns(org.Hs.eg.db)
+```
+```{r}
+ens.str <- substr(rownames(res), 1, 15)
+res$symbol <- mapIds(org.Hs.eg.db,
+                     keys=ens.str,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res$entrez <- mapIds(org.Hs.eg.db,
+                     keys=ens.str,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+```{r}
+ens.str <- substr(rownames(res2), 1, 15)
+res2$symbol <- mapIds(org.Hs.eg.db,
+                     keys=ens.str,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res2$entrez <- mapIds(org.Hs.eg.db,
+                     keys=ens.str,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+
+```{r}
+ens.str <- substr(rownames(res3), 1, 15)
+res3$symbol <- mapIds(org.Hs.eg.db,
+                     keys=ens.str,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res3$entrez <- mapIds(org.Hs.eg.db,
+                     keys=ens.str,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+resOrdered <- res[order(res$pvalue),]
+head(resOrdered)
+```
+```{r}
+resOrdered2 <- res2[order(res2$pvalue),]
+head(resOrdered2)
+```
+
+
+```{r}
+resOrdered3 <- res3[order(res3$pvalue),]
+head(resOrdered3)
+```
+##Exporting results
+
+```{r}
+resOrderedDF <- as.data.frame(resOrdered)[1:100, ]
+write.csv(resOrderedDF, file = "results.csv")
+```
+
+
+A more sophisticated way for exporting results the Bioconductor package ReportingTools (Huntley et al. 2013). ReportingTools will automatically generate dynamic HTML documents, including links to external databases using gene identifiers and boxplots summarizing the normalized counts across groups. See the ReportingTools vignettes for full details. The simplest version of creating a dynamic ReportingTools report is performed with the following code:
+
+
+```{r}
+library("ReportingTools")
+htmlRep <- HTMLReport(shortName="report", title="My report",
+                      reportDirectory="./report")
+publish(resOrderedDF, htmlRep)
+url <- finish(htmlRep)
+browseURL(url)
+```
+
+### Eliminate hidden batch effects:
+
+Podemos usar modelos estadísticos diseádos para RNA-seq con el paquete sva (Leek 2014) o el paquete RUVSeq (Risso et al 2014) en Bioconductos para detectar groupins de las muestras.
+
+El paquete SVA se usa el término de variables subrogadas para estimar variables que queremos tener en cuenta en nuestro analisis, miestras que el paquete RUV usa factores para las variaciones indeseadas con el acrónimo ´Eliminar Variaciones Indeseadas´explicandolo en el título del paquete. El primer uso de SVA es encontrar hidden batch effects y luego RUV.
+
+### Using SVA with DESeq2
+
+
+```{r}
+library("sva")
+```
+
+```{r}
+dat  <- counts(dds, normalized = TRUE)
+idx  <- rowMeans(dat) > 1
+dat  <- dat[idx, ]
+mod  <- model.matrix(~ Group, colData(dds))
+mod0 <- model.matrix(~   1, colData(dds))
+svseq <- svaseq(dat, mod, mod0, n.sv = 2)
+```
+```{r}
+svseq$sv
+```
+```{r}
+par(mfrow = c(2, 1), mar = c(3,5,3,1))
+for (i in 1:2) {
+  stripchart(svseq$sv[, i] ~ dds$Sample_Name , vertical = TRUE, main = paste0("SV", i))
+  abline(h = 0)
+ }
+```
+```{r}
+ddssva <- dds
+ddssva$SV1 <- svseq$sv[,1]
+ddssva$SV2 <- svseq$sv[,2]
+design(ddssva) <- ~ SV1 + SV2 + Group
+```
+
+
+
+### Batch effect con RUV
+
+```{r}
+library("RUVSeq")
+```
+
+```{r}
+set <- newSeqExpressionSet(counts(dds))
+idx  <- rowSums(counts(set) > 5) >= 2
+set  <- set[idx, ]
+set <- betweenLaneNormalization(set, which="upper")
+not.sig <- rownames(res)[which(res$pvalue > .1)]
+empirical <- rownames(set)[ rownames(set) %in% not.sig ]
+set <- RUVg(set, empirical, k=2)
+pData(set)
+
+```
+```{r}
+par(mfrow = c(2, 1), mar = c(3,5,3,1))
+for (i in 1:2) {
+  stripchart(pData(set)[, i] ~ dds$Group, vertical = TRUE, main = paste0("W", i))
+  abline(h = 0)
+ }
+```
+###RESULTADOS:
+
+Según la matriz de contraste de las tres comparaciones, podemos observar, que entre los grupos SFI y ELI, los genes SLC7A11, CARS1, CLEC4F, MIR205HG, ADM2 y SARS1, son los genes que presentan una diferencia de expresión entre los dos grupos.
+
+Entre el grupo ELi y NIT, podemos ver los siguientes genes diferencialmente expresados:
+ENSG00000211930.1, NIBAN3, MS4A1, ENSG00000211897.3, POU2AF1 y CD79A.
+
+Entre los grupos SFI y NIT, los genes diferencialmente expresados son: ENSG00000211930.1 , ENSG00000211896.2, ENSG00000211959.2, ENSG00000211900.2 , ENSG00000211662.2 , ENSG00000211673.2.
+
+```{r}
+head(resOrdered)
+head(resOrdered2)
+head(resOrdered3)
+```
+
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4}
+
+plotCounts(dds, gene = 'ENSG00000151012.9', intgroup=c("Group"))
+
+```
+Podemos ver como el gen SLC7A11 presenta una mayor expresión en el grupo SFI comparado con el grupo ELI.
+
+
+## DISCUSIÓN.
+
+En primer lugar,antes de realizar una interpretación de los resultados hay que tener en cuenta que el estudio realizado ha sido sobre una muestra de los datos totales y no sobre el completo de los datos, por lo tanto para poder extraer resultados robustos y concluyentes, se debería realizar el estudio sobre los datos totales del estudio. Lo que se presentan a continuación son datos preliminares sobre un subset de 30 muestras del estudio total, 10 de cada grupo.
+
+Los genes mayormente expresados en SFI que en ELI, son asociados a hormonas o a transportadores, como por ejemplo el gen ADM2 que pertenece a la familia de las calcitoninas y SLC7A11 que es un transportador de cisteina y glutamato. Estos genes pueden estar directamente relacionados al grupo SFI ya que pertenecen a tejido específico focalizado en la tiroides. 
+Cómo es de esperar, en el grupo ELI, econtramos genes que codifican proteinas relacionadas con las células immunes, ya que este grupo, las muestras pertenecen a tejido linfoide, como por ejemplo el gen CD79A que forma el BCR de las células B, comparado con el grupo NIT, que contiene tejido no infiltrado.
+
+Entre los grupos FI y NIT, los genes encontrados como diferencialmente expresados no están registrados por Ensembl y por lo tanto su función se desconoce y serían de poca utilidad para este estudio.
+
+
+
+
+
+
